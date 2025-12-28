@@ -131,6 +131,12 @@ namespace VertexWeightTool
                 SceneView.RepaintAll();
             }
 
+            // Ensure targetMesh is assigned if reference exists (e.g. after recompile)
+            if (targetSkinnedMesh != null && targetMesh == null)
+            {
+                targetMesh = targetSkinnedMesh.sharedMesh;
+            }
+
             if (!isEditMode)
             {
                 EditorGUILayout.HelpBox("Enable Edit Mode to start.", MessageType.Info);
@@ -159,7 +165,8 @@ namespace VertexWeightTool
         private void DrawSelectedVertexInfo()
         {
             GUILayout.Label($"Selected Vertex: {selectedVertexIndex}", EditorStyles.boldLabel);
-
+            
+            GUILayout.BeginHorizontal();
             // Prune 機能
             if (GUILayout.Button("Prune < 0.01"))
             {
