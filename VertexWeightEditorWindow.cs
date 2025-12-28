@@ -267,39 +267,63 @@ namespace VertexWeightTool
         {
             if (targetMesh == null || targetSkinnedMesh == null) return;
 
+            // カメラ情報の取得
+            Camera cam = SceneView.currentDrawingSceneView.camera;
+            if (cam == null) return;
+
+            Plane[] frustumPlanes = GeometryUtility.CalculateFrustumPlanes(cam);
+            
             Transform tr = targetSkinnedMesh.transform;
+            Matrix4x4 localToWorld = tr.localToWorldMatrix;
             Vector3[] vertices = targetMesh.vertices;
             
-            // 設定: 深度テスト
+            // 描画設定
             var originalZTest = Handles.zTest;
             Handles.zTest = showOccludedVertices ? UnityEngine.Rendering.CompareFunction.Always : UnityEngine.Rendering.CompareFunction.LessEqual;
 
-            // 全表示の場合
-            if (showAllVertices)
-            {
-                Handles.color = new Color(0.5f, 0.5f, 0.5f, 0.5f); // 未選択は半透明グレーなど
-                // パフォーマンス注意: 頂点数が多い場合は間引きやカリングが必要
-                // Handles.DotHandleCap を大量に呼ぶのは重いが一旦実装
-                
-                // 簡易最適化: VertexCountが多すぎる場合は警告出して一部のみ表示など検討できるが
-                // ここではバッチ処理できないので愚直に回す
-                for (int i = 0; i < vertices.Length; i++)
-                {
-                    if (i == selectedVertexIndex) continue; // 選択中は別途描画
-                    
-                    Vector3 worldPos = tr.TransformPoint(vertices[i]);
-                    float size = HandleUtility.GetHandleSize(worldPos) * 0.03f; // 小さめ
-                    Handles.DotHandleCap(0, worldPos, Quaternion.identity, size, EventType.Repaint);
-                }
-            }
-
-            // 選択頂点の描画
+            // 選択中の頂点を描画 (常に表示)
             if (selectedVertexIndex != -1 && selectedVertexIndex < vertices.Length)
             {
-                Handles.zTest = UnityEngine.Rendering.CompareFunction.Always; // 選択中は常に見える
-                Vector3 worldPos = tr.TransformPoint(vertices[selectedVertexIndex]);
+                Handles.zTest = UnityEngine.Rendering.CompareFunction.Always;
+                Vector3 worldPos = localToWorld.MultiplyPoint3x4(vertices[selectedVertexIndex]);
                 Handles.color = Color.green;
                 Handles.DotHandleCap(0, worldPos, Quaternion.identity, HandleUtility.GetHandleSize(worldPos) * 0.08f, EventType.Repaint);
+            }
+
+            // 全表示の場合の描画
+            if (showAllVertices)
+            {
+                Handles.color = new Color(0.5f, 0.5f, 0.5f, 0.5f);
+                Handles.zTest = showOccludedVertices ? UnityEngine.Rendering.CompareFunction.Always : UnityEngine.Rendering.CompareFunction.LessEqual;
+
+                // 最適化: カリングと簡易描画
+                // Handles.DotHandleCapはコストが高いので、数が多い場合は
+                // 画面内判定を行い、かつ画面サイズに応じて間引く等の処理が理想的
+                
+                int len = vertices.Length;
+                for (int i = 0; i < len; i++)
+                {
+                    if (i == selectedVertexIndex) continue;
+
+                    Vector3 worldPos = localToWorld.MultiplyPoint3x4(vertices[i]);
+                    
+                    // 簡易的なバウンディングチェック（点なので厳密なAABB不要）
+                    // 視錐台内にあるかチェック
+                    // GeometryUtility.TestPlanesAABB(frustumPlanes, bounds) はバウンディングボックス用
+                    // 点の場合は自前で平面距離チェックするか、小さいBoundsを作る
+                    // ここではループ内でBounds作るのは重いので、簡易的に自前実装するか、
+                    // あるいはビューポート変換して0-1範囲か見るのが速い
+                    
+                    Vector3 viewportPos = cam.WorldToViewportPoint(worldPos);
+                    if (viewportPos.x < 0 || viewportPos.x > 1 || viewportPos.y < 0 || viewportPos.y > 1 || viewportPos.z < 0)
+                    {
+                        continue; // 画面外
+                    }
+
+                    // 描画
+                    float size = HandleUtility.GetHandleSize(worldPos) * 0.03f;
+                    Handles.DotHandleCap(0, worldPos, Quaternion.identity, size, EventType.Repaint);
+                }
             }
             
             Handles.zTest = originalZTest;

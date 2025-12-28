@@ -84,14 +84,16 @@ namespace VertexWeightTool
             // 3. セパレータ（ハンドル）の処理
             for (int i = 0; i < separatorPositions.Count; i++)
             {
-                // ロックチェック: 隣接するボーンのどちらかがロックされていたら操作不可
-                if (boneWeights[i].isLocked || boneWeights[i + 1].isLocked)
+                // スマートロック判定:
+                // 左側(0...i)に少なくとも1つ、右側(i+1...End)に少なくとも1つのUnlockedボーンがあれば操作可能
+                bool canExpandLeft = FindUnlockBoneIndex(boneWeights, i, true) != -1;
+                bool canExpandRight = FindUnlockBoneIndex(boneWeights, i + 1, false) != -1;
+
+                if (!canExpandLeft || !canExpandRight)
                 {
-                    // ロックされている場合、セパレータを別の色で描画する等あってもいいが、
-                    // とりあえずマウス操作を受け付けない
                     float sepXLocked = separatorPositions[i];
                     Rect lockedHandleRect = new Rect(sepXLocked - 1, rect.y, 2, rect.height);
-                    EditorGUI.DrawRect(lockedHandleRect, Color.black); // ロック時は黒線固定
+                    EditorGUI.DrawRect(lockedHandleRect, Color.black); 
                     continue;
                 }
 
@@ -116,13 +118,18 @@ namespace VertexWeightTool
                 {
                     float deltaX = currentEvent.delta.x;
                     float deltaWeight = deltaX / totalWidth;
+                    
+                    int sepIndex = draggingSeparatorIndex;
+                    
+                    // 操作対象となるUnlockedボーンを探す
+                    // 左側は index以下の最も近いUnlocked
+                    // 右側は index+1以上の最も近いUnlocked
+                    int leftTarget = FindUnlockBoneIndex(boneWeights, sepIndex, true);
+                    int rightTarget = FindUnlockBoneIndex(boneWeights, sepIndex + 1, false);
 
-                    // i番目とi+1番目のウェイトを調整
-                    // セパレータiは、bone[i]とbone[i+1]の間にある
-                    int indexVerify = draggingSeparatorIndex;
-                    if (indexVerify >= 0 && indexVerify < boneWeights.Count - 1)
+                    if (leftTarget != -1 && rightTarget != -1)
                     {
-                        AdjustWeights(boneWeights, indexVerify, deltaWeight);
+                        AdjustSmartWeights(boneWeights, leftTarget, rightTarget, deltaWeight);
                         changed = true;
                     }
                     
@@ -140,41 +147,58 @@ namespace VertexWeightTool
             return changed;
         }
 
-        private static void AdjustWeights(List<BoneWeightInfo> weights, int separatorIndex, float delta)
+        // searchStart から方向 (searchLeft) に向かって Unlocked なボーンを探す
+        private static int FindUnlockBoneIndex(List<BoneWeightInfo> weights, int searchStart, bool searchLeft)
         {
-            // separatorIndex は index と index+1 の境界
-            // 右に動かす(delta > 0) -> Left(index)が増える、Right(index+1)が減る
-            
-            var left = weights[separatorIndex];
-            var right = weights[separatorIndex + 1];
+            if (searchLeft)
+            {
+                for (int i = searchStart; i >= 0; i--)
+                {
+                    if (!weights[i].isLocked) return i;
+                }
+            }
+            else
+            {
+                for (int i = searchStart; i < weights.Count; i++)
+                {
+                    if (!weights[i].isLocked) return i;
+                }
+            }
+            return -1;
+        }
+
+        private static void AdjustSmartWeights(List<BoneWeightInfo> weights, int leftIndex, int rightIndex, float delta)
+        {
+            var left = weights[leftIndex];
+            var right = weights[rightIndex];
 
             float leftWeight = left.weight + delta;
             float rightWeight = right.weight - delta;
 
-            // 境界チェック (0 ~ 1) かつ、隣の領域を侵食しすぎないように
-            // ここでは簡易的に 0を下回らないようにする
             if (leftWeight < 0)
             {
-                // 左が0になるまで戻す
                 float overflow = -leftWeight;
                 leftWeight = 0;
-                rightWeight -= overflow; // rightは増える方向には制限なし（合計1なので他が減るだけだが、ここでは2者間移動）
-                                         // ただし2者間移動なので left+right=const を保つ必要がある
-                rightWeight = left.weight + right.weight; // 全部右へ
+                rightWeight -= overflow; 
+                // rightWeight may increase, limit? No, usually total is 1.0, so increase is fine.
+                // But wait, if rightWeight exceeds total available?
+                // Logic: Left + Right = Const. 
             }
             else if (rightWeight < 0)
             {
-                // 右が0になるまで
                 float overflow = -rightWeight;
                 rightWeight = 0;
-                leftWeight = left.weight + right.weight; // 全部左へ
+                leftWeight -= overflow;
             }
 
             left.weight = leftWeight;
             right.weight = rightWeight;
-            
-            // クラスなので参照元の値が変わるが、Listの中身がstruct等だと反映されないので注意
-            // ここではBoneWeightInfoがclassであることを前提とする
+        }
+
+        private static void AdjustWeights(List<BoneWeightInfo> weights, int separatorIndex, float delta)
+        {
+           // Legacy method kept if needed or can be removed.
+           // Replacing usage above with AdjustSmartWeights
         }
 
         private static void NormalizeWeights(List<BoneWeightInfo> weights)
