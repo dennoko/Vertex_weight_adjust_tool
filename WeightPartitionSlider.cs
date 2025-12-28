@@ -84,6 +84,17 @@ namespace VertexWeightTool
             // 3. セパレータ（ハンドル）の処理
             for (int i = 0; i < separatorPositions.Count; i++)
             {
+                // ロックチェック: 隣接するボーンのどちらかがロックされていたら操作不可
+                if (boneWeights[i].isLocked || boneWeights[i + 1].isLocked)
+                {
+                    // ロックされている場合、セパレータを別の色で描画する等あってもいいが、
+                    // とりあえずマウス操作を受け付けない
+                    float sepXLocked = separatorPositions[i];
+                    Rect lockedHandleRect = new Rect(sepXLocked - 1, rect.y, 2, rect.height);
+                    EditorGUI.DrawRect(lockedHandleRect, Color.black); // ロック時は黒線固定
+                    continue;
+                }
+
                 float sepX = separatorPositions[i];
                 Rect handleRect = new Rect(sepX - HANDLE_WIDTH / 2, rect.y, HANDLE_WIDTH, rect.height);
 
@@ -187,12 +198,14 @@ namespace VertexWeightTool
         public int boneIndex;
         public string boneName;
         public float weight;
+        public bool isLocked;
 
         public BoneWeightInfo(int index, string name, float w)
         {
             boneIndex = index;
             boneName = name;
             weight = w;
+            isLocked = false;
         }
     }
 }

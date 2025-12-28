@@ -15,6 +15,8 @@ namespace VertexWeightTool
 
         // 状態変数
         private bool isEditMode = false;
+        private bool showAllVertices = false;
+        private bool showOccludedVertices = true;
         private Transform currentSelection;
         private SkinnedMeshRenderer targetSkinnedMesh;
         private Mesh targetMesh;
@@ -57,6 +59,18 @@ namespace VertexWeightTool
 
             EditorGUI.BeginChangeCheck();
             isEditMode = GUILayout.Toggle(isEditMode, "Edit Mode", "Button", GUILayout.Height(30));
+            
+            if (isEditMode)
+            {
+                GUILayout.BeginHorizontal();
+                showAllVertices = GUILayout.Toggle(showAllVertices, "Show All Vertices");
+                if (showAllVertices)
+                {
+                    showOccludedVertices = GUILayout.Toggle(showOccludedVertices, "Show Occluded");
+                }
+                GUILayout.EndHorizontal();
+            }
+
             if (EditorGUI.EndChangeCheck())
             {
                 SceneView.RepaintAll();
@@ -162,14 +176,21 @@ namespace VertexWeightTool
             foreach (var bw in currentBoneWeights)
             {
                 GUILayout.BeginHorizontal();
-                GUILayout.Label(bw.boneName, GUILayout.Width(150));
                 
+                // Lock Toggle
+                bw.isLocked = EditorGUILayout.Toggle(bw.isLocked, GUILayout.Width(20));
+
+                GUILayout.Label(bw.boneName, GUILayout.Width(130));
+                
+                EditorGUI.BeginDisabledGroup(bw.isLocked);
                 float newWeight = EditorGUILayout.FloatField(bw.weight);
-                if (!Mathf.Approximately(newWeight, bw.weight))
+                if (!bw.isLocked && !Mathf.Approximately(newWeight, bw.weight))
                 {
                     bw.weight = newWeight;
                     changed = true;
                 }
+                EditorGUI.EndDisabledGroup();
+                
                 GUILayout.EndHorizontal();
             }
 
@@ -182,12 +203,35 @@ namespace VertexWeightTool
         
         private void NormalizeCurrentWeights()
         {
-            float total = currentBoneWeights.Sum(w => w.weight);
-            if (total > 0 && Mathf.Abs(total - 1f) > 0.0001f)
+            // ロックされていないものの和を計算
+            float lockedTotal = currentBoneWeights.Where(w => w.isLocked).Sum(w => w.weight);
+            var unlockedBones = currentBoneWeights.Where(w => !w.isLocked).ToList();
+            
+            if (lockedTotal >= 1.0f)
             {
-                foreach(var bw in currentBoneWeights)
+                // ロックだけで埋まっている場合、他は0にする
+                foreach(var bw in unlockedBones) bw.weight = 0f;
+                return;
+            }
+
+            float targetUnlockedTotal = 1.0f - lockedTotal;
+            float currentUnlockedTotal = unlockedBones.Sum(w => w.weight);
+
+            if (currentUnlockedTotal > 0.0001f)
+            {
+                float scale = targetUnlockedTotal / currentUnlockedTotal;
+                foreach(var bw in unlockedBones)
                 {
-                    bw.weight /= total;
+                    bw.weight *= scale;
+                }
+            }
+            else
+            {
+                // 全て0だった場合など -> 均等配分などで埋める？
+                // とりあえず何もしないか、最初の要素に残りを振る
+                if (unlockedBones.Count > 0)
+                {
+                    unlockedBones[0].weight = targetUnlockedTotal;
                 }
             }
         }
@@ -197,15 +241,16 @@ namespace VertexWeightTool
             if (!isEditMode || targetSkinnedMesh == null || targetMesh == null) return;
 
             Event e = Event.current;
-            
-            // 頂点の可視化と選択
-            // パフォーマンスのため、マウスに近い頂点だけを描画・判定するロジックが必要
-            // 簡易実装として、全頂点をハンドルとして描画するのは重すぎるため、
-            // マウス位置からRayを飛ばして近い頂点を探索する
 
+            // 頂点描画
+            if (e.type == EventType.Repaint)
+            {
+                DrawVertices();
+            }
+            
             if (e.type == EventType.MouseDown && e.button == 0 && !e.alt)
             {
-                // クリック判定
+                // クリック判定 (既存ロジック)
                 int nearestIndex = FindNearestVertex(e.mousePosition);
                 if (nearestIndex != -1)
                 {
@@ -216,16 +261,48 @@ namespace VertexWeightTool
                 }
             }
 
-            // 選択頂点の描画
-            if (selectedVertexIndex != -1 && selectedVertexIndex < targetMesh.vertexCount)
+        }
+
+        private void DrawVertices()
+        {
+            if (targetMesh == null || targetSkinnedMesh == null) return;
+
+            Transform tr = targetSkinnedMesh.transform;
+            Vector3[] vertices = targetMesh.vertices;
+            
+            // 設定: 深度テスト
+            var originalZTest = Handles.zTest;
+            Handles.zTest = showOccludedVertices ? UnityEngine.Rendering.CompareFunction.Always : UnityEngine.Rendering.CompareFunction.LessEqual;
+
+            // 全表示の場合
+            if (showAllVertices)
             {
-                Vector3 worldPos = targetSkinnedMesh.transform.TransformPoint(targetMesh.vertices[selectedVertexIndex]);
-                Handles.color = Color.green;
-                Handles.DotHandleCap(0, worldPos, Quaternion.identity, HandleUtility.GetHandleSize(worldPos) * 0.1f, EventType.Repaint);
+                Handles.color = new Color(0.5f, 0.5f, 0.5f, 0.5f); // 未選択は半透明グレーなど
+                // パフォーマンス注意: 頂点数が多い場合は間引きやカリングが必要
+                // Handles.DotHandleCap を大量に呼ぶのは重いが一旦実装
+                
+                // 簡易最適化: VertexCountが多すぎる場合は警告出して一部のみ表示など検討できるが
+                // ここではバッチ処理できないので愚直に回す
+                for (int i = 0; i < vertices.Length; i++)
+                {
+                    if (i == selectedVertexIndex) continue; // 選択中は別途描画
+                    
+                    Vector3 worldPos = tr.TransformPoint(vertices[i]);
+                    float size = HandleUtility.GetHandleSize(worldPos) * 0.03f; // 小さめ
+                    Handles.DotHandleCap(0, worldPos, Quaternion.identity, size, EventType.Repaint);
+                }
             }
 
-            // マウスオーバーのハイライト（オプション）
-            // 重い場合は省略
+            // 選択頂点の描画
+            if (selectedVertexIndex != -1 && selectedVertexIndex < vertices.Length)
+            {
+                Handles.zTest = UnityEngine.Rendering.CompareFunction.Always; // 選択中は常に見える
+                Vector3 worldPos = tr.TransformPoint(vertices[selectedVertexIndex]);
+                Handles.color = Color.green;
+                Handles.DotHandleCap(0, worldPos, Quaternion.identity, HandleUtility.GetHandleSize(worldPos) * 0.08f, EventType.Repaint);
+            }
+            
+            Handles.zTest = originalZTest;
         }
 
         private int FindNearestVertex(Vector2 mousePos)
@@ -289,6 +366,7 @@ namespace VertexWeightTool
         private void CopyWeights()
         {
             if (currentBoneWeights == null) return;
+            // Lock状態はコピーしない方が安全かもしれないが、一応コピーする？今回はしないでおく
             _clipboardWeights = currentBoneWeights.Select(w => new BoneWeightInfo(w.boneIndex, w.boneName, w.weight)).ToList();
             Debug.Log($"Copied weights from vertex {selectedVertexIndex}");
         }
@@ -297,7 +375,7 @@ namespace VertexWeightTool
         {
             if (_clipboardWeights == null || _clipboardWeights.Count == 0 || selectedVertexIndex == -1) return;
             
-            // 現在のリストをクリップボードの内容で置き換え (Deep Copy)
+            // Paste時はLock情報はリセットする（新しい値になるため）
             currentBoneWeights = _clipboardWeights.Select(w => new BoneWeightInfo(w.boneIndex, w.boneName, w.weight)).ToList();
             
             ApplyWeights();
