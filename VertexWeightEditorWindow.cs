@@ -13,11 +13,12 @@ namespace VertexWeightTool
             GetWindow<VertexWeightEditorWindow>("Vertex Weight Tool");
         }
 
-        // 状態変数
         private bool isEditMode = false;
         private bool showAllVertices = false;
         private bool showOccludedVertices = true;
-        private Transform currentSelection;
+        private bool showHeatmap = false;
+        private int heatmapBoneIndex = -1; // 選択中のボーンインデックス
+        // private Transform currentSelection; // Removed dependency on selection
         private SkinnedMeshRenderer targetSkinnedMesh;
         private Mesh targetMesh;
         private int selectedVertexIndex = -1;
@@ -27,6 +28,10 @@ namespace VertexWeightTool
         private List<BoneWeightInfo> currentBoneWeights = new List<BoneWeightInfo>();
         // _clipboardWeights declared below
 
+        // 設定
+        private Color vertexColor = new Color(0.5f, 0.5f, 0.5f, 0.5f);
+        private Color selectedVertexColor = Color.green;
+        
         // GUI定数
         private const float HANDLE_SIZE = 0.05f;
         private const float PICK_SIZE = 0.1f;
@@ -68,6 +73,35 @@ namespace VertexWeightTool
                 {
                     showOccludedVertices = GUILayout.Toggle(showOccludedVertices, "Show Occluded");
                 }
+                
+                GUILayout.Space(10);
+                showHeatmap = GUILayout.Toggle(showHeatmap, "Show Heatmap");
+                if (showHeatmap)
+                {
+                    // ヒートマップ対象ボーンの選択
+                    string[] boneNames = targetSkinnedMesh != null ? targetSkinnedMesh.bones.Select(b => b.name).ToArray() : new string[0];
+                    if (boneNames.Length > 0)
+                    {
+                        int selectedIndexInList = -1;
+                        if (heatmapBoneIndex != -1) 
+                        {
+                            selectedIndexInList = heatmapBoneIndex;
+                        }
+                        
+                        int newIndex = EditorGUILayout.Popup("Bone", selectedIndexInList, boneNames);
+                        if (newIndex != selectedIndexInList)
+                        {
+                            heatmapBoneIndex = newIndex;
+                            SceneView.RepaintAll();
+                        }
+                    }
+                }
+                GUILayout.EndHorizontal();
+                
+                // Colors
+                GUILayout.BeginHorizontal();
+                vertexColor = EditorGUILayout.ColorField("Vertex Color", vertexColor);
+                selectedVertexColor = EditorGUILayout.ColorField("Selected Color", selectedVertexColor);
                 GUILayout.EndHorizontal();
             }
 
@@ -76,17 +110,36 @@ namespace VertexWeightTool
                 SceneView.RepaintAll();
             }
 
+            GUILayout.Space(5);
+            
+            // Target Selection (Explicit)
+            EditorGUI.BeginChangeCheck();
+            targetSkinnedMesh = (SkinnedMeshRenderer)EditorGUILayout.ObjectField("Target Mesh", targetSkinnedMesh, typeof(SkinnedMeshRenderer), true);
+            if (EditorGUI.EndChangeCheck())
+            {
+                if (targetSkinnedMesh != null)
+                {
+                    targetMesh = targetSkinnedMesh.sharedMesh;
+                }
+                else
+                {
+                    targetMesh = null;
+                }
+                selectedVertexIndex = -1;
+                currentBoneWeights.Clear();
+                isEditMode = true; // AssignしたタイミングでONにする便利機能
+                SceneView.RepaintAll();
+            }
+
             if (!isEditMode)
             {
-                EditorGUILayout.HelpBox("Select a SkinnedMeshRenderer and enable Edit Mode to start.", MessageType.Info);
+                EditorGUILayout.HelpBox("Enable Edit Mode to start.", MessageType.Info);
                 return;
             }
 
-            ValidateSelection();
-
             if (targetSkinnedMesh == null)
             {
-                EditorGUILayout.HelpBox("Please select a GameObject with SkinnedMeshRenderer.", MessageType.Warning);
+                EditorGUILayout.HelpBox("Please assign a SkinnedMeshRenderer.", MessageType.Warning);
                 return;
             }
 
@@ -102,38 +155,22 @@ namespace VertexWeightTool
             }
         }
 
-        private void ValidateSelection()
-        {
-            Transform activeTransform = Selection.activeTransform;
-            if (activeTransform != currentSelection)
-            {
-                currentSelection = activeTransform;
-                if (currentSelection != null)
-                {
-                    targetSkinnedMesh = currentSelection.GetComponent<SkinnedMeshRenderer>();
-                    if (targetSkinnedMesh != null)
-                    {
-                        targetMesh = targetSkinnedMesh.sharedMesh;
-                    }
-                    else
-                    {
-                        targetMesh = null;
-                        selectedVertexIndex = -1;
-                    }
-                }
-                else
-                {
-                    targetSkinnedMesh = null;
-                    targetMesh = null;
-                    selectedVertexIndex = -1;
-                }
-                Repaint();
-            }
-        }
 
         private void DrawSelectedVertexInfo()
         {
             GUILayout.Label($"Selected Vertex: {selectedVertexIndex}", EditorStyles.boldLabel);
+
+            // Prune 機能
+            if (GUILayout.Button("Prune < 0.01"))
+            {
+                PruneWeights(0.01f);
+            }
+            // Mirror 機能
+            if (GUILayout.Button("Mirror Weights (X-Axis)"))
+            {
+                MirrorWeights();
+            }
+            GUILayout.EndHorizontal();
 
             // コピー＆ペースト
             GUILayout.BeginHorizontal();
@@ -281,25 +318,31 @@ namespace VertexWeightTool
             var originalZTest = Handles.zTest;
             Handles.zTest = showOccludedVertices ? UnityEngine.Rendering.CompareFunction.Always : UnityEngine.Rendering.CompareFunction.LessEqual;
 
+            // ヒートマップ用データの事前準備（重い場合はキャッシュ検討）
+            Dictionary<int, float> heatmapWeights = null;
+            if (showHeatmap && heatmapBoneIndex != -1)
+            {
+                 // 全頂点の該当ボーンウェイトを取得するのは重いので、
+                 // DrawLoop内で BoneWeights 配列にアクセスする
+                 // ただし targetMesh.boneWeights はコピーを返すので、事前に取得しておく
+            }
+            BoneWeight[] meshBoneWeights = targetMesh.boneWeights; // 配列コピーが発生するプロパティ
+
             // 選択中の頂点を描画 (常に表示)
             if (selectedVertexIndex != -1 && selectedVertexIndex < vertices.Length)
             {
                 Handles.zTest = UnityEngine.Rendering.CompareFunction.Always;
                 Vector3 worldPos = localToWorld.MultiplyPoint3x4(vertices[selectedVertexIndex]);
-                Handles.color = Color.green;
+                Handles.color = selectedVertexColor;
                 Handles.DotHandleCap(0, worldPos, Quaternion.identity, HandleUtility.GetHandleSize(worldPos) * 0.08f, EventType.Repaint);
             }
 
             // 全表示の場合の描画
             if (showAllVertices)
             {
-                Handles.color = new Color(0.5f, 0.5f, 0.5f, 0.5f);
-                Handles.zTest = showOccludedVertices ? UnityEngine.Rendering.CompareFunction.Always : UnityEngine.Rendering.CompareFunction.LessEqual;
+                // Color ramp
+                Color baseColor = vertexColor;
 
-                // 最適化: カリングと簡易描画
-                // Handles.DotHandleCapはコストが高いので、数が多い場合は
-                // 画面内判定を行い、かつ画面サイズに応じて間引く等の処理が理想的
-                
                 int len = vertices.Length;
                 for (int i = 0; i < len; i++)
                 {
@@ -307,17 +350,25 @@ namespace VertexWeightTool
 
                     Vector3 worldPos = localToWorld.MultiplyPoint3x4(vertices[i]);
                     
-                    // 簡易的なバウンディングチェック（点なので厳密なAABB不要）
-                    // 視錐台内にあるかチェック
-                    // GeometryUtility.TestPlanesAABB(frustumPlanes, bounds) はバウンディングボックス用
-                    // 点の場合は自前で平面距離チェックするか、小さいBoundsを作る
-                    // ここではループ内でBounds作るのは重いので、簡易的に自前実装するか、
-                    // あるいはビューポート変換して0-1範囲か見るのが速い
-                    
+                    // カリング
                     Vector3 viewportPos = cam.WorldToViewportPoint(worldPos);
                     if (viewportPos.x < 0 || viewportPos.x > 1 || viewportPos.y < 0 || viewportPos.y > 1 || viewportPos.z < 0)
                     {
                         continue; // 画面外
+                    }
+
+                    // 色決定
+                    if (showHeatmap && heatmapBoneIndex != -1)
+                    {
+                        float w = GetBoneWeight(meshBoneWeights[i], heatmapBoneIndex);
+                        // Blue(0) -> Red(1)
+                        // 0の場合は表示しない、あるいは薄く
+                        if (w <= 0.001f) Handles.color = baseColor;
+                        else Handles.color = Color.Lerp(Color.blue, Color.red, w);
+                    }
+                    else
+                    {
+                        Handles.color = baseColor;
                     }
 
                     // 描画
@@ -327,6 +378,15 @@ namespace VertexWeightTool
             }
             
             Handles.zTest = originalZTest;
+        }
+
+        private float GetBoneWeight(BoneWeight bw, int boneIndex)
+        {
+            if (bw.boneIndex0 == boneIndex) return bw.weight0;
+            if (bw.boneIndex1 == boneIndex) return bw.weight1;
+            if (bw.boneIndex2 == boneIndex) return bw.weight2;
+            if (bw.boneIndex3 == boneIndex) return bw.weight3;
+            return 0f;
         }
 
         private int FindNearestVertex(Vector2 mousePos)
@@ -446,8 +506,136 @@ namespace VertexWeightTool
             
             EditorUtility.SetDirty(targetMesh); // アセットを保存対象としてマーク
             
+            EditorUtility.SetDirty(targetMesh); // アセットを保存対象としてマーク
+            
             // 即時反映のためにDirty設定などは不要だが、
             // SkinnedMeshRendererへの通知が必要な場合がある（通常はsharedMesh書き換えでOK）
+        }
+
+        private void PruneWeights(float threshold)
+        {
+            if (currentBoneWeights == null) return;
+            currentBoneWeights.RemoveAll(w => w.weight < threshold);
+            NormalizeCurrentWeights();
+            ApplyWeights();
+            Repaint();
+            Debug.Log("Pruned small weights.");
+        }
+
+        private void MirrorWeights()
+        {
+            if (targetMesh == null || selectedVertexIndex == -1) return;
+            
+            Transform tr = targetSkinnedMesh.transform;
+            Vector3 currentPosLocal = targetMesh.vertices[selectedVertexIndex];
+            Vector3 mirrorPosLocal = new Vector3(-currentPosLocal.x, currentPosLocal.y, currentPosLocal.z); 
+            // ワールド座標系でのミラーが必要なら変換挟むが、通常モデルはローカルで対象
+
+            // 対称頂点を探す
+            int mirrorIndex = FindNearestVertexLocal(mirrorPosLocal);
+            if (mirrorIndex == -1 || mirrorIndex == selectedVertexIndex)
+            {
+                Debug.LogWarning("Mirror vertex not found.");
+                return;
+            }
+
+            // ボーン名のマッピング
+            List<BoneWeightInfo> mirroredWeights = new List<BoneWeightInfo>();
+            foreach (var bw in currentBoneWeights)
+            {
+                string mirrorName = GetMirrorBoneName(bw.boneName);
+                if (string.IsNullOrEmpty(mirrorName)) continue;
+                
+                // ボーンインデックスを探す
+                int mirrorBoneIndex = FindBoneIndex(mirrorName);
+                if (mirrorBoneIndex != -1)
+                {
+                    mirroredWeights.Add(new BoneWeightInfo(mirrorBoneIndex, mirrorName, bw.weight));
+                }
+                else
+                {
+                    Debug.LogWarning($"Mirror bone not found: {mirrorName}");
+                }
+            }
+
+            // 適用 (対象頂点を選択してApplyするわけではないので、直接BoneWeightsを書き換える)
+            ApplyWeightsToVertex(mirrorIndex, mirroredWeights);
+            Debug.Log($"Mirrored weights from {selectedVertexIndex} to {mirrorIndex}");
+        }
+
+        private int FindNearestVertexLocal(Vector3 localPos)
+        {
+            float minSqrDist = float.MaxValue;
+            int bestIndex = -1;
+            Vector3[] vertices = targetMesh.vertices;
+            
+            for(int i=0; i<vertices.Length; i++)
+            {
+                float sqrDist = (vertices[i] - localPos).sqrMagnitude;
+                if(sqrDist < 0.0001f) // かなり近い
+                {
+                    if (sqrDist < minSqrDist)
+                    {
+                        minSqrDist = sqrDist;
+                        bestIndex = i;
+                    }
+                }
+            }
+            return bestIndex;
+        }
+
+        private string GetMirrorBoneName(string name)
+        {
+            // 簡易的な置換ロジック
+            if (name.Contains("Left")) return name.Replace("Left", "Right");
+            if (name.Contains("Right")) return name.Replace("Right", "Left");
+            if (name.Contains("_L")) return name.Replace("_L", "_R");
+            if (name.Contains("_R")) return name.Replace("_R", "_L");
+            if (name.EndsWith(".L")) return name.Substring(0, name.Length - 2) + ".R";
+            if (name.EndsWith(".R")) return name.Substring(0, name.Length - 2) + ".L";
+            
+            // センターボーンなどはそのまま
+            return name;
+        }
+
+        private int FindBoneIndex(string name)
+        {
+            for(int i=0; i<targetSkinnedMesh.bones.Length; i++)
+            {
+                if (targetSkinnedMesh.bones[i].name == name) return i;
+            }
+            return -1;
+        }
+
+        private void ApplyWeightsToVertex(int vertexIndex, List<BoneWeightInfo> weightsInfos)
+        {
+            Undo.RecordObject(targetMesh, "Mirror Vertex Weights");
+            
+            BoneWeight[] weights = targetMesh.boneWeights;
+            BoneWeight bw = weights[vertexIndex];
+
+            // Normalize
+            float total = weightsInfos.Sum(w => w.weight);
+            if (total > 0)
+            {
+                weightsInfos.ForEach(w => w.weight /= total);
+            }
+
+            var sorted = weightsInfos.OrderByDescending(w => w.weight).Take(4).ToList();
+            
+            bw.boneIndex0 = 0; bw.weight0 = 0;
+            bw.boneIndex1 = 0; bw.weight1 = 0;
+            bw.boneIndex2 = 0; bw.weight2 = 0;
+            bw.boneIndex3 = 0; bw.weight3 = 0;
+
+            if (sorted.Count > 0) { bw.boneIndex0 = sorted[0].boneIndex; bw.weight0 = sorted[0].weight; }
+            if (sorted.Count > 1) { bw.boneIndex1 = sorted[1].boneIndex; bw.weight1 = sorted[1].weight; }
+            if (sorted.Count > 2) { bw.boneIndex2 = sorted[2].boneIndex; bw.weight2 = sorted[2].weight; }
+            if (sorted.Count > 3) { bw.boneIndex3 = sorted[3].boneIndex; bw.weight3 = sorted[3].weight; }
+
+            weights[vertexIndex] = bw;
+            targetMesh.boneWeights = weights;
+            EditorUtility.SetDirty(targetMesh);
         }
     }
 }
