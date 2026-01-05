@@ -11,6 +11,18 @@ namespace VertexWeightTool
         private const float HANDLE_WIDTH = 10f;
         private const float MIN_WEIGHT_DISPLAY = 0.01f;
 
+        public static readonly Color[] Colors = new Color[] { 
+            new Color(1f, 0.4f, 0.4f), // 赤系
+            new Color(0.4f, 1f, 0.4f), // 緑系
+            new Color(0.4f, 0.4f, 1f), // 青系
+            new Color(1f, 1f, 0.4f)    // 黄系
+        };
+
+        public static Color GetColor(int index)
+        {
+            return Colors[index % Colors.Length];
+        }
+
         // ドラッグ状態管理
         private static bool isDragging = false;
         private static int draggingSeparatorIndex = -1;
@@ -41,13 +53,8 @@ namespace VertexWeightTool
             NormalizeWeights(boneWeights);
 
             // 色の生成用
-            Color[] colors = new Color[] { 
-                new Color(1f, 0.4f, 0.4f), // 赤系
-                new Color(0.4f, 1f, 0.4f), // 緑系
-                new Color(0.4f, 0.4f, 1f), // 青系
-                new Color(1f, 1f, 0.4f)    // 黄系
-            };
-
+            // 外部参照用に公開
+            
             List<float> separatorPositions = new List<float>();
             float accumulateWeight = 0f;
 
@@ -57,7 +64,7 @@ namespace VertexWeightTool
                 float width = weight * totalWidth;
                 
                 Rect sectionRect = new Rect(currentX, rect.y, width, rect.height);
-                Color sectionColor = colors[i % colors.Length];
+                Color sectionColor = GetColor(i);
                 
                 EditorGUI.DrawRect(sectionRect, sectionColor);
                 

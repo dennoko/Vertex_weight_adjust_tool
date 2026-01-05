@@ -342,6 +342,9 @@ namespace VertexWeightTool
                 Vector3 worldPos = localToWorld.MultiplyPoint3x4(vertices[selectedVertexIndex]);
                 Handles.color = selectedVertexColor;
                 Handles.DotHandleCap(0, worldPos, Quaternion.identity, HandleUtility.GetHandleSize(worldPos) * 0.08f, EventType.Repaint);
+                
+                // ボーン依存関係の描画
+                DrawBoneDependencyLines(worldPos);
             }
 
             // 全表示の場合の描画
@@ -385,6 +388,42 @@ namespace VertexWeightTool
             }
             
             Handles.zTest = originalZTest;
+        }
+
+        private void DrawBoneDependencyLines(Vector3 vertexWorldPos)
+        {
+            if (currentBoneWeights == null || targetSkinnedMesh == null) return;
+
+            for (int i = 0; i < currentBoneWeights.Count; i++)
+            {
+                var bw = currentBoneWeights[i];
+                if (bw.weight <= 0.001f) continue;
+
+                // ボーンのTransformを取得
+                Transform bone = null;
+                if (bw.boneIndex >= 0 && bw.boneIndex < targetSkinnedMesh.bones.Length)
+                {
+                    bone = targetSkinnedMesh.bones[bw.boneIndex];
+                }
+
+                if (bone != null)
+                {
+                    Vector3 bonePos = bone.position;
+                    
+                    // 色設定 (スライダーと同じ色)
+                    Color c = WeightPartitionSlider.GetColor(i);
+                    Handles.color = c;
+                    
+                    // 線を描画 (点線でも良いが、まずは実線で)
+                    Handles.DrawLine(vertexWorldPos, bonePos);
+                    
+                    // ボーン位置にマーカー
+                    float size = HandleUtility.GetHandleSize(bonePos) * 0.1f;
+                    Handles.SphereHandleCap(0, bonePos, Quaternion.identity, size, EventType.Repaint);
+                    
+                    // オプション: ボーン名などのラベルを表示しても良いが、煩雑になるので一旦保留
+                }
+            }
         }
 
         private float GetBoneWeight(BoneWeight bw, int boneIndex)
