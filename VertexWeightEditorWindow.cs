@@ -408,20 +408,54 @@ namespace VertexWeightTool
 
                 if (bone != null)
                 {
-                    Vector3 bonePos = bone.position;
-                    
+                    Vector3 headPos = bone.position;
+                    Vector3 tailPos = headPos;
+
+                    // 終点（Tail）の決定ロジック
+                    if (bone.childCount > 0)
+                    {
+                        // 最初の子ボーンを終点とする
+                        tailPos = bone.GetChild(0).position;
+                    }
+                    else
+                    {
+                        // 末端ボーン: 親からのベクトルを半分ほど延長する
+                        if (bone.parent != null)
+                        {
+                            Vector3 fromParent = headPos - bone.parent.position;
+                            if (fromParent.sqrMagnitude > 0.0001f) // 親と重なっていない場合
+                            {
+                                tailPos = headPos + (fromParent * 0.5f);
+                            }
+                            else
+                            {
+                                // 親と同じ位置にある稀なケース: ローカルYなどで代用
+                                tailPos = headPos + bone.up * 0.05f;
+                            }
+                        }
+                        else
+                        {
+                            // ルートかつ末端（ほぼありえないが）
+                            tailPos = headPos + bone.up * 0.1f;
+                        }
+                    }
+
                     // 色設定 (スライダーと同じ色)
                     Color c = WeightPartitionSlider.GetColor(i);
                     Handles.color = c;
+
+                    // 1. 頂点 -> ボーン始点の点線
+                    Handles.DrawDottedLine(vertexWorldPos, headPos, 4.0f);
+
+                    // 2. ボーン本体の描画 (始点 -> 終点)
+                    Handles.DrawLine(headPos, tailPos);
+
+                    // 3. 始点と終点の球
+                    float headSize = HandleUtility.GetHandleSize(headPos) * 0.05f;
+                    float tailSize = HandleUtility.GetHandleSize(tailPos) * 0.03f; // 終点は少し小さく
                     
-                    // 線を描画 (点線でも良いが、まずは実線で)
-                    Handles.DrawLine(vertexWorldPos, bonePos);
-                    
-                    // ボーン位置にマーカー
-                    float size = HandleUtility.GetHandleSize(bonePos) * 0.1f;
-                    Handles.SphereHandleCap(0, bonePos, Quaternion.identity, size, EventType.Repaint);
-                    
-                    // オプション: ボーン名などのラベルを表示しても良いが、煩雑になるので一旦保留
+                    Handles.SphereHandleCap(0, headPos, Quaternion.identity, headSize, EventType.Repaint);
+                    Handles.SphereHandleCap(0, tailPos, Quaternion.identity, tailSize, EventType.Repaint);
                 }
             }
         }
